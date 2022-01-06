@@ -140,3 +140,10 @@ cython_debug/
 cifar-10*
 lightning_logs/
 vit*
+
+/cifar-10-batches-py/
+aaa.py
+bbbb.py
+Figure_1.png
+README.md
+.idea/
