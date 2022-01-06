@@ -91,29 +91,6 @@ class ImageClassifier(pl.LightningModule):
         # self.tokenizer.save_pretrained(self.hparams.save_dir)
 
 
-# class MLP(nn.Module):
-#     '''
-#     Multilayer Perceptron.
-#     '''
-#
-#     def __init__(self, num_labels):
-#         super().__init__()
-#         self.layers = nn.Sequential(
-#             nn.Flatten(),
-#             nn.Linear(224 * 224 * 3, 64),
-#             nn.ReLU(),
-#             nn.Linear(64, 32),
-#             nn.ReLU(),
-#             nn.Linear(32, num_labels)
-#         )
-#
-#     def forward(self, inputs):
-#         '''Forward pass'''
-#         print("HH", inputs)
-#         # pixel_values = pixel_values[0]
-#         return self.layers(inputs[0])
-
-
 class MLP(pl.LightningModule):
 
     def __init__(self, num_labels):
@@ -166,9 +143,8 @@ class MLP(pl.LightningModule):
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         x, y = batch
         outputs = self.layers(x)
-        loss = self.ce(outputs, y)
         self.test_acc(torch.argmax(outputs, axis=1), y)
-        self.log("test_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+
         self.log('test_acc', self.test_acc, on_step=True, on_epoch=False)
 
     def configure_optimizers(self):
