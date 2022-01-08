@@ -1,25 +1,25 @@
-from transformers import ViTFeatureExtractor, ViTForImageClassification, BatchFeature
-from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler
-from torchvision.transforms import ToTensor, Normalize, Resize, Compose
+from transformers import ViTFeatureExtractor
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torchvision.transforms import ToTensor, Normalize, Resize, Compose, RandomVerticalFlip, RandomHorizontalFlip, \
+    RandomResizedCrop, RandomRotation
 
 import torch
 from torchvision import datasets, transforms
 import pytorch_lightning as pl
-import torchmetrics
-from torchvision.datasets import CIFAR10
 
-from img_model import ImageClassifier, MLP
-
-from PIL import Image
-import requests
 import os
 from tqdm import tqdm
-from torch import optim
 from torch import nn
-import numpy as np
-from matplotlib import pyplot as plt
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+from ViT import ViT
+from vit_pytorch.levit import LeViT
+from sklearn.model_selection import GridSearchCV
+import numpy as np
+
+from img_model import ExtractFeatures
+
+from CyTran import ConvTransformer
 
 class SimpleCustomBatch:
     def __init__(self, data):
@@ -39,8 +39,7 @@ def my_collate(batch):
 
 
 class ViTFeatureExtractorTransforms:
-    def __init__(self, model_name_or_path):
-        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
+    def __init__(self, model_name_or_path, feature_extractor):
         transform = []
 
         if feature_extractor.do_resize:
@@ -59,20 +58,24 @@ class ViTFeatureExtractorTransforms:
 
 if __name__ == '__main__':
     model_name_or_path = 'google/vit-base-patch16-224-in21k'
-    num_labels = 10
+    num_labels = 21
     batch_size = 8
     num_workers = 2
-    max_epochs = 4
+    max_epochs = 50
+
+    feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
 
     transform_train = transforms.Compose([
-        transforms.RandomResizedCrop((224, 224), scale=(0.05, 1.0)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        RandomResizedCrop(224),
+        RandomRotation([-45, 45]),
+        RandomVerticalFlip(0.3),
+        RandomHorizontalFlip(0.3),
+        ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
+        ExtractFeatures(feature_extractor)
     ])
     transform_test = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
+        ExtractFeatures(feature_extractor)
     ])
 
     # The directory with the test set contains 30% of data (used to train)
@@ -94,24 +97,105 @@ if __name__ == '__main__':
                              num_workers=4,
                              pin_memory=True) if testset is not None else None
 
-    feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
-    model = MLP(num_labels=7)
+    # ---------------- PYTORCH-LIGHTNING TRAINING ----------------
 
-    epochs = 10
-    save_path = r'/home/antonio/PycharmProjects/ViT-MLP/huggingface-vit-finetune/lightning_logs/version_0'
+    # checkpoint_callback = ModelCheckpoint(
+    #     dirpath="/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/version_0",
+    #     filename="best_model",
+    #     save_top_k=1,
+    #     mode="min",
+    # )
 
-    checkpoint_callback = ModelCheckpoint(
-        dirpath="/home/antonio/PycharmProjects/ViT-MLP/huggingface-vit-finetune/lightning_logs/version_0",
-        filename="best_model",
-        save_top_k=1,
-        mode="min",
+    # save_path_pl = r'/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/version_0'
+    # model = MLP_pl(num_labels)
+    #
+    # pl.seed_everything(42)
+    # trainer = pl.Trainer(auto_scale_batch_size='power', gpus=1, deterministic=True, max_epochs=max_epochs,
+    #                      auto_lr_find=True, benchmark=True, callbacks=[checkpoint_callback])
+    # if not os.path.exists(save_path_pl):
+    #     trainer.fit(model, train_loader)
+    #
+    # model = model.load_from_checkpoint(save_path_pl + "/best_model-v1.ckpt", num_labels=num_labels)
+    # trainer.test(model, test_loader)
+
+    # model = ViT(
+    #     image_size=224,
+    #     patch_size=32,
+    #     num_classes=num_labels,
+    #     dim=512,
+    #     depth=3,
+    #     heads=6,
+    #     mlp_dim=512,
+    #     dropout=0.1,
+    #     emb_dropout=0.1
+    # )
+
+    model = LeViT(
+        image_size=224,
+        num_classes=num_labels,
+        stages=1,  # number of stages
+        dim=(256),  # dimensions at each stage
+        depth=4,  # transformer of depth 4 at each stage
+        heads=(6),  # heads at each stage
+        mlp_mult=2,
+        dropout=0.1
     )
 
-    pl.seed_everything(42)
-    trainer = pl.Trainer(auto_scale_batch_size='power', gpus=1, deterministic=True, max_epochs=epochs,
-                         auto_lr_find=True, benchmark=True, callbacks=[checkpoint_callback])
-    if not os.path.exists(save_path):
-        trainer.fit(model, train_loader)
+    # model = ConvTransformer()
 
-    model = model.load_from_checkpoint(save_path + "/best_model-v1.ckpt", num_labels=7)
-    trainer.test(model, test_loader)
+    # ---------------- CLASSIC TRAINING ----------------
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device)
+    save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+MLP_net.pth'
+    # model = MLP_classic(num_labels).to(device)
+    torch.manual_seed(42)
+
+    loss_function = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    if not os.path.exists(save_path_classic):
+        for epoch in range(max_epochs):
+            print(f'Starting epoch {epoch + 1}')
+
+            current_loss = 0.0
+            for i, data in enumerate(train_loader, 0):
+                inputs, targets = data
+                inputs = inputs.to(device)
+                targets = targets.to(device)
+
+                optimizer.zero_grad()
+
+                outputs = model(inputs)
+
+                loss = loss_function(outputs, targets)
+
+                loss.backward()
+                optimizer.step()
+
+                current_loss += loss.item()
+                if i % 20 == 19:
+                    print('Loss after mini-batch %5d: %.3f' % (i + 1, current_loss / 20))
+                    current_loss = 0.0
+        # torch.save(model.state_dict(), save_path_classic)
+
+    print('Training process has finished.')
+
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for data in tqdm(test_loader):
+            images, labels = data
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    print('Accuracy of the network on the test images: %d %%' % (
+            100 * correct / total))
+
+    torch.cuda.empty_cache()

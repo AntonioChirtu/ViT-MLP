@@ -7,9 +7,7 @@ import torchmetrics as metrics
 import torch
 from pytorch_lightning.utilities import rank_zero_only
 from torch.utils.data import DataLoader
-from transformers import (AdamW, AutoConfig,
-                          AutoModelForSequenceClassification, AutoTokenizer,
-                          get_linear_schedule_with_warmup, ViTForImageClassification, ViTFeatureExtractor)
+from transformers import (AdamW, get_linear_schedule_with_warmup, ViTForImageClassification, ViTFeatureExtractor)
 
 from torch import nn
 import numpy as np
@@ -91,7 +89,7 @@ class ImageClassifier(pl.LightningModule):
         # self.tokenizer.save_pretrained(self.hparams.save_dir)
 
 
-class MLP(pl.LightningModule):
+class MLP_pl(pl.LightningModule):
 
     def __init__(self, num_labels):
         super().__init__()
@@ -109,26 +107,14 @@ class MLP(pl.LightningModule):
         self.train_acc = metrics.Accuracy()
 
     def forward(self, pixel_values):
-        pixel_values = torch.from_numpy(pixel_values[0])
-        # pixel_values = pixel_values.squeeze()
         return self.layers(pixel_values)
 
     def training_step(self, batch, batch_idx):
-        feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224-in21k')
         x, y = batch
-        x_features = np.empty(x.shape, dtype=int)
-
-        for idx in range(x.size(0)):
-            temp = feature_extractor(images=x[idx, :, :, :].cpu().data.numpy(), return_tensor="pt")
-            x_features[idx, :, :, :] = temp['pixel_values'][0]
-        x_features = torch.from_numpy(x_features)
-        x_features = x_features.type(torch.FloatTensor)
-        x_features = x_features.view(x_features.size(0), -1)
-        x_features = x_features.to("cuda:0")
-        y_hat = self.layers(x_features)
+        y_hat = self.layers(x)
         loss = self.ce(y_hat, y)
         self.log('train_loss', loss)
-        return {'loss' : loss, 'y_pred' : y_hat, 'y_true' : y}
+        return {'loss': loss, 'y_pred': y_hat, 'y_true': y}
 
     def training_epoch_end(self, outputs):
         accuracy = []
@@ -150,3 +136,49 @@ class MLP(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
         return optimizer
+
+
+class MLP_classic(nn.Module):
+
+    def __init__(self, num_labels):
+        super().__init__()
+        self.layer1 = nn.Conv2d(3, 64, 3, stride=2)
+        self.layer2 = nn.MaxPool2d(2)
+        self.layer3 = nn.ReLU()
+        self.layer4 = nn.Conv2d(64, 32, 3, stride=2)
+        self.layer5 = nn.MaxPool2d(2)
+        self.layer6 = nn.ReLU()
+        self.layer7 = nn.Conv2d(32, 16, 3, stride=2)
+        self.layer8 = nn.MaxPool2d(2)
+        self.layer9 = nn.ReLU()
+        self.layer10 = nn.Flatten()
+        self.layer11 = nn.Linear(144, num_labels)
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.layer5(x)
+        x = self.layer6(x)
+        x = self.layer7(x)
+        x = self.layer8(x)
+        x = self.layer9(x)
+        x = self.layer10(x)
+        x = self.layer11(x)
+
+        return x
+
+
+class ExtractFeatures(object):
+    """Extract features of samples"""
+
+    def __init__(self, feature_extractor):
+        self.feature_extractor = feature_extractor
+
+    def __call__(self, sample):
+        features = self.feature_extractor(images=sample)
+        return features['pixel_values'][0]
+
+
+# class MyDataLoader(DataLoader):
