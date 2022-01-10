@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 from transformers import ViTFeatureExtractor
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torchvision.transforms import ToTensor, Normalize, Resize, Compose, RandomVerticalFlip, RandomHorizontalFlip, \
@@ -13,13 +14,16 @@ from torch import nn
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 from ViT import ViT
-from vit_pytorch.levit import LeViT
+from LeViT import LeViT
 from sklearn.model_selection import GridSearchCV
 import numpy as np
 
 from img_model import ExtractFeatures
 
+from scipy.ndimage import gaussian_filter
+
 from CyTran import ConvTransformer
+
 
 class SimpleCustomBatch:
     def __init__(self, data):
@@ -56,18 +60,33 @@ class ViTFeatureExtractorTransforms:
         return self.transform(x)
 
 
+def matlab_style_gauss2D(shape=(3, 3), sigma=0.5):
+    """
+    2D gaussian mask - should give the same result as MATLAB's
+    fspecial('gaussian',[shape],[sigma])
+    """
+    m, n = [(ss - 1.) / 2. for ss in shape]
+    y, x = np.ogrid[-m:m + 1, -n:n + 1]
+    h = np.exp(-(x * x + y * y) / (2. * sigma * sigma))
+    h[h < np.finfo(h.dtype).eps * h.max()] = 0
+    sumh = h.sum()
+    if sumh != 0:
+        h /= sumh
+    return h
+
+
 if __name__ == '__main__':
     model_name_or_path = 'google/vit-base-patch16-224-in21k'
     num_labels = 21
     batch_size = 8
     num_workers = 2
-    max_epochs = 50
+    max_epochs = 100
 
     feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
 
     transform_train = transforms.Compose([
-        RandomResizedCrop(224),
-        RandomRotation([-45, 45]),
+        # RandomResizedCrop(224),
+        RandomRotation([-10, 10]),
         RandomVerticalFlip(0.3),
         RandomHorizontalFlip(0.3),
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
@@ -79,9 +98,9 @@ if __name__ == '__main__':
     ])
 
     # The directory with the test set contains 30% of data (used to train)
-    trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/Sydney/test",
+    trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/UCM_70-30/train",
                                     transform=transform_train)
-    testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/Sydney/train",
+    testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/UCM_70-30/test",
                                    transform=transform_test)
 
     train_sampler = RandomSampler(trainset)
@@ -127,21 +146,27 @@ if __name__ == '__main__':
     #     heads=6,
     #     mlp_dim=512,
     #     dropout=0.1,
-    #     emb_dropout=0.1
+    #     emb_dropout=0.1,
+    #     channels=6
     # )
 
-    model = LeViT(
-        image_size=224,
-        num_classes=num_labels,
-        stages=1,  # number of stages
-        dim=(256),  # dimensions at each stage
-        depth=4,  # transformer of depth 4 at each stage
-        heads=(6),  # heads at each stage
-        mlp_mult=2,
-        dropout=0.1
-    )
+    # model = LeViT(
+    #     image_size=224,
+    #     num_classes=num_labels,
+    #     stages=1,  # number of stages
+    #     dim=(256),  # dimensions at each stage
+    #     depth=4,  # transformer of depth 4 at each stage
+    #     heads=(6),  # heads at each stage
+    #     mlp_mult=2,
+    #     dropout=0.1,
+    #     input_channels=6
+    # )
 
-    # model = ConvTransformer()
+    model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6)
+
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    params = sum([np.prod(p.size()) for p in model_parameters])
+    print(params)
 
     # ---------------- CLASSIC TRAINING ----------------
 
@@ -149,18 +174,30 @@ if __name__ == '__main__':
     model = model.to(device)
     save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+MLP_net.pth'
     # model = MLP_classic(num_labels).to(device)
-    torch.manual_seed(42)
 
     loss_function = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
+    acc_list = []
+
     if not os.path.exists(save_path_classic):
+        model.train()
         for epoch in range(max_epochs):
             print(f'Starting epoch {epoch + 1}')
 
             current_loss = 0.0
             for i, data in enumerate(train_loader, 0):
                 inputs, targets = data
+                # if epoch < max_epochs - 10:
+                #     temp = gaussian_filter(inputs.numpy(), sigma=epoch/max_epochs)
+                #     inputs = torch.from_numpy(temp)
+
+                if epoch < max_epochs - 10:
+                    inputs = inputs.numpy()
+                    for batch in range(inputs.shape[0]):
+                        for channel in range(inputs.shape[1]):
+                            temp = gaussian_filter(inputs[batch, channel, :, :], sigma=3*epoch/max_epochs)
+                    inputs = torch.from_numpy(inputs)
                 inputs = inputs.to(device)
                 targets = targets.to(device)
 
@@ -177,13 +214,35 @@ if __name__ == '__main__':
                 if i % 20 == 19:
                     print('Loss after mini-batch %5d: %.3f' % (i + 1, current_loss / 20))
                     current_loss = 0.0
+
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                model.eval()
+                for data in tqdm(test_loader):
+                    images, labels = data
+                    images = images.to(device)
+                    labels = labels.to(device)
+
+                    outputs = model(images)
+                    _, predicted = torch.max(outputs.data, 1)
+
+                    total += labels.size(0)
+                    correct += (predicted == labels).sum().item()
+
+            print('Accuracy of the network on the test images: %d %%' % (
+                    100 * correct / total))
+            acc_list.append(100 * correct / total)
         # torch.save(model.state_dict(), save_path_classic)
 
     print('Training process has finished.')
+    plt.plot(np.linspace(0, max_epochs, max_epochs), acc_list)
+    plt.show()
 
     correct = 0
     total = 0
     with torch.no_grad():
+        model.eval()
         for data in tqdm(test_loader):
             images, labels = data
             images = images.to(device)

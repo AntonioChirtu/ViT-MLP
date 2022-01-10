@@ -178,7 +178,8 @@ class ExtractFeatures(object):
 
     def __call__(self, sample):
         features = self.feature_extractor(images=sample)
-        return features['pixel_values'][0]
+        output = np.concatenate((features['pixel_values'][0], sample.numpy()), axis=0)
+        return output
 
 
 # class MyDataLoader(DataLoader):

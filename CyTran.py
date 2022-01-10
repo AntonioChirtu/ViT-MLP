@@ -125,7 +125,7 @@ class Transformer(nn.Module):
 
 
 class ConvTransformer(nn.Module):
-    def __init__(self, input_nc=3, out_classes=21, n_downsampling=3, depth=3, heads=6, proj_kernel=3,
+    def __init__(self, input_nc=3, out_classes=7, n_downsampling=3, depth=3, heads=6, proj_kernel=3,
                  mlp_mult=4, dropout=0., ngf=8):
 
         super().__init__()
@@ -142,7 +142,3 @@ class ConvTransformer(nn.Module):
         x = self.flatten(x)
         x = self.fc(x)
         return x
-
-
-a = ConvTransformer()
-a(torch.zeros((2, 3, 224, 224)))
