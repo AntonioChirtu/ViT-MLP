@@ -1,4 +1,8 @@
+import sys
+import time
+
 from matplotlib import pyplot as plt
+from torchmetrics import Precision
 from transformers import ViTFeatureExtractor
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torchvision.transforms import ToTensor, Normalize, Resize, Compose, RandomVerticalFlip, RandomHorizontalFlip, \
@@ -23,6 +27,93 @@ from img_model import ExtractFeatures
 from scipy.ndimage import gaussian_filter
 
 from CyTran import ConvTransformer
+
+from sklearn.metrics import confusion_matrix
+import pandas as pd
+import seaborn as sns
+
+term_width = 10
+
+TOTAL_BAR_LENGTH = 86.
+last_time = time.time()
+begin_time = last_time
+
+
+def progress_bar(current, total, msg=None):
+    global last_time, begin_time
+    if current == 0:
+        begin_time = time.time()  # Reset for new bar.
+
+    cur_len = int(TOTAL_BAR_LENGTH * current / total)
+    rest_len = int(TOTAL_BAR_LENGTH - cur_len) - 1
+
+    sys.stdout.write(' [')
+    for i in range(cur_len):
+        sys.stdout.write('=')
+    sys.stdout.write('>')
+    for i in range(rest_len):
+        sys.stdout.write('.')
+    sys.stdout.write(']')
+
+    cur_time = time.time()
+    step_time = cur_time - last_time
+    last_time = cur_time
+    tot_time = cur_time - begin_time
+
+    L = []
+    L.append('  Step: %s' % format_time(step_time))
+    L.append(' | Tot: %s' % format_time(tot_time))
+    if msg:
+        L.append(' | ' + msg)
+
+    msg = ''.join(L)
+    sys.stdout.write(msg)
+    for i in range(term_width - int(TOTAL_BAR_LENGTH) - len(msg) - 3):
+        sys.stdout.write(' ')
+
+    # Go back to the center of the bar.
+    for i in range(term_width - int(TOTAL_BAR_LENGTH / 2)):
+        sys.stdout.write('\b')
+    sys.stdout.write(' %d/%d ' % (current + 1, total))
+
+    if current < total - 1:
+        sys.stdout.write('\r')
+    else:
+        sys.stdout.write('\n')
+    sys.stdout.flush()
+
+
+def format_time(seconds):
+    days = int(seconds / 3600 / 24)
+    seconds = seconds - days * 3600 * 24
+    hours = int(seconds / 3600)
+    seconds = seconds - hours * 3600
+    minutes = int(seconds / 60)
+    seconds = seconds - minutes * 60
+    secondsf = int(seconds)
+    seconds = seconds - secondsf
+    millis = int(seconds * 1000)
+
+    f = ''
+    i = 1
+    if days > 0:
+        f += str(days) + 'D'
+        i += 1
+    if hours > 0 and i <= 2:
+        f += str(hours) + 'h'
+        i += 1
+    if minutes > 0 and i <= 2:
+        f += str(minutes) + 'm'
+        i += 1
+    if secondsf > 0 and i <= 2:
+        f += str(secondsf) + 's'
+        i += 1
+    if millis > 0 and i <= 2:
+        f += str(millis) + 'ms'
+        i += 1
+    if f == '':
+        f = '0ms'
+    return f
 
 
 class SimpleCustomBatch:
@@ -60,33 +151,41 @@ class ViTFeatureExtractorTransforms:
         return self.transform(x)
 
 
-def matlab_style_gauss2D(shape=(3, 3), sigma=0.5):
-    """
-    2D gaussian mask - should give the same result as MATLAB's
-    fspecial('gaussian',[shape],[sigma])
-    """
-    m, n = [(ss - 1.) / 2. for ss in shape]
-    y, x = np.ogrid[-m:m + 1, -n:n + 1]
-    h = np.exp(-(x * x + y * y) / (2. * sigma * sigma))
-    h[h < np.finfo(h.dtype).eps * h.max()] = 0
-    sumh = h.sum()
-    if sumh != 0:
-        h /= sumh
-    return h
+def mixup_data(x, y, alpha=1.0, use_cuda=True):
+    '''Returns mixed inputs, pairs of targets, and lambda'''
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size()[0]
+    if use_cuda:
+        index = torch.randperm(batch_size).cuda()
+    else:
+        index = torch.randperm(batch_size)
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 
 if __name__ == '__main__':
     model_name_or_path = 'google/vit-base-patch16-224-in21k'
-    num_labels = 21
+    num_labels = 30
     batch_size = 8
     num_workers = 2
-    max_epochs = 100
+    max_epochs = 200
+    dataset = "AID"
 
     feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
 
     transform_train = transforms.Compose([
         # RandomResizedCrop(224),
-        RandomRotation([-10, 10]),
+        RandomRotation([-5, 5]),
         RandomVerticalFlip(0.3),
         RandomHorizontalFlip(0.3),
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
@@ -98,9 +197,9 @@ if __name__ == '__main__':
     ])
 
     # The directory with the test set contains 30% of data (used to train)
-    trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/UCM_70-30/train",
+    trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/" + dataset + "_70-30/train",
                                     transform=transform_train)
-    testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/UCM_70-30/test",
+    testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/" + dataset + "_70-30/test",
                                    transform=transform_test)
 
     train_sampler = RandomSampler(trainset)
@@ -162,7 +261,7 @@ if __name__ == '__main__':
     #     input_channels=6
     # )
 
-    model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6)
+    model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
 
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
@@ -172,7 +271,7 @@ if __name__ == '__main__':
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = model.to(device)
-    save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+MLP_net.pth'
+    save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+CT_net_' + dataset + '.pth'
     # model = MLP_classic(num_labels).to(device)
 
     loss_function = nn.CrossEntropyLoss()
@@ -186,20 +285,34 @@ if __name__ == '__main__':
             print(f'Starting epoch {epoch + 1}')
 
             current_loss = 0.0
+            train_loss = 0
+            reg_loss = 0
+            correct = 0
+            total = 0
+            best_acc = 0
             for i, data in enumerate(train_loader, 0):
                 inputs, targets = data
-                # if epoch < max_epochs - 10:
-                #     temp = gaussian_filter(inputs.numpy(), sigma=epoch/max_epochs)
-                #     inputs = torch.from_numpy(temp)
 
-                if epoch < max_epochs - 10:
+                if max_epochs - 50 > epoch > 0:
                     inputs = inputs.numpy()
                     for batch in range(inputs.shape[0]):
-                        for channel in range(inputs.shape[1]):
-                            temp = gaussian_filter(inputs[batch, channel, :, :], sigma=3*epoch/max_epochs)
+                        for channel in range(3):
+                            temp = gaussian_filter(inputs[batch, channel, :, :], sigma=0.5/(5*epoch))
                     inputs = torch.from_numpy(inputs)
+
                 inputs = inputs.to(device)
                 targets = targets.to(device)
+
+                # inputs, targets_a, targets_b, lam = mixup_data(inputs, targets)
+                # inputs, targets_a, targets_b = map(Variable, (inputs,
+                #                                               targets_a, targets_b))
+                # outputs = model(inputs)
+                # loss = mixup_criterion(loss_function, outputs, targets_a, targets_b, lam)
+                # train_loss += loss.item()
+                # _, predicted = torch.max(outputs.data, 1)
+                # total += targets.size(0)
+                # correct += (lam * predicted.eq(targets_a.data).cpu().sum().float()
+                #             + (1 - lam) * predicted.eq(targets_b.data).cpu().sum().float())
 
                 optimizer.zero_grad()
 
@@ -211,9 +324,14 @@ if __name__ == '__main__':
                 optimizer.step()
 
                 current_loss += loss.item()
-                if i % 20 == 19:
-                    print('Loss after mini-batch %5d: %.3f' % (i + 1, current_loss / 20))
+                if i % 500 == 499:
+                    print('Loss after mini-batch %5d: %.3f' % (i + 1, current_loss / 500))
                     current_loss = 0.0
+
+                # progress_bar(i, len(train_loader),
+                #              'Loss: %.3f | Reg: %.5f | Acc: %.3f%% (%d/%d)'
+                #              % (train_loss / (i + 1), reg_loss / (i + 1),
+                #                 100. * correct / total, correct, total))
 
             correct = 0
             total = 0
@@ -233,16 +351,27 @@ if __name__ == '__main__':
             print('Accuracy of the network on the test images: %d %%' % (
                     100 * correct / total))
             acc_list.append(100 * correct / total)
-        # torch.save(model.state_dict(), save_path_classic)
 
-    print('Training process has finished.')
-    plt.plot(np.linspace(0, max_epochs, max_epochs), acc_list)
-    plt.show()
+            if (100 * correct / total) > best_acc:
+                torch.save(model.state_dict(), save_path_classic)
+
+    # print('Training process has finished.')
+    # plt.plot(np.linspace(0, max_epochs, max_epochs), acc_list)
+    # plt.show()
+
+    model.load_state_dict(torch.load(save_path_classic))
+    model.eval()
+    model.to(device)
 
     correct = 0
     total = 0
+    y_pred = []
+    y_true = []
+
+    precision = Precision(num_classes=num_labels, top_k=3)
+    precision = precision.to(device)
+
     with torch.no_grad():
-        model.eval()
         for data in tqdm(test_loader):
             images, labels = data
             images = images.to(device)
@@ -251,6 +380,11 @@ if __name__ == '__main__':
             outputs = model(images)
             _, predicted = torch.max(outputs.data, 1)
 
+            precision(outputs, labels)
+
+            y_pred.extend(predicted.cpu().numpy())
+            y_true.extend(labels.cpu().numpy())
+
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
@@ -258,3 +392,24 @@ if __name__ == '__main__':
             100 * correct / total))
 
     torch.cuda.empty_cache()
+
+    cf_matrix = confusion_matrix(y_true, y_pred)
+    num_classes = list(set(y_true))
+
+    cf_matrix = cf_matrix.astype('float') / cf_matrix.sum(axis=1)[:, np.newaxis]
+    df_cm = pd.DataFrame(cf_matrix,
+                         index=[i for i in range(len(num_classes))],
+                         columns=[i for i in range(len(num_classes))])
+
+    plt.figure(figsize=(12, 7))
+    sns.heatmap(df_cm, annot=True)
+    plt.savefig(dataset + "_" + 'confusion_matrix.png')
+
+    # Compute per-class accuracy
+    print("Accuracy for class: ")
+    for idx in num_classes:
+        print(idx, end=" : ")
+        print(cf_matrix.diagonal()[idx])
+
+    print("Precision@K: ", precision.compute().cpu().numpy())
+
