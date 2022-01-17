@@ -175,11 +175,11 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
 
 if __name__ == '__main__':
     model_name_or_path = 'google/vit-base-patch16-224-in21k'
-    num_labels = 30
+    num_labels = 7
     batch_size = 8
-    num_workers = 2
+    num_workers = 8
     max_epochs = 100
-    dataset = "AID"
+    dataset = "Sydney"
 
     feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
 
@@ -189,11 +189,11 @@ if __name__ == '__main__':
         RandomVerticalFlip(0.3),
         RandomHorizontalFlip(0.3),
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
-        # ExtractFeatures(feature_extractor)
+        ExtractFeatures(feature_extractor)
     ])
     transform_test = transforms.Compose([
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
-        # ExtractFeatures(feature_extractor)
+        ExtractFeatures(feature_extractor)
     ])
 
     # The directory with the test set contains 30% of data (used to train)
@@ -215,7 +215,7 @@ if __name__ == '__main__':
                              num_workers=4,
                              pin_memory=True) if testset is not None else None
 
-    model = ConvTransformer(input_nc=3, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
+    model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
 
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
@@ -302,7 +302,7 @@ if __name__ == '__main__':
                     total += labels.size(0)
                     correct += (predicted == labels).sum().item()
 
-            print('Accuracy of the network on the test images: %d %%' % (
+            print('Accuracy of the network on the test images: %f %%' % (
                     100 * correct / total))
             acc_list.append(100 * correct / total)
 
@@ -317,8 +317,8 @@ if __name__ == '__main__':
     model.eval()
     model.to(device)
 
-    correct = 0
-    total = 0
+    correct = 0.0
+    total = 0.0
     y_pred = []
     y_true = []
 
@@ -342,7 +342,7 @@ if __name__ == '__main__':
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-    print('Accuracy of the network on the test images: %d %%' % (
+    print('Accuracy of the network on the test images: %f %%' % (
             100 * correct / total))
 
     torch.cuda.empty_cache()
@@ -354,9 +354,26 @@ if __name__ == '__main__':
     df_cm = pd.DataFrame(cf_matrix,
                          index=[i for i in range(len(num_classes))],
                          columns=[i for i in range(len(num_classes))])
+    df_cm = df_cm.round(2)
+
+    sns.set(font_scale=1, rc={'text.usetex' : True})
+    # sns.set_context("paper", rc={"font.size": 8, "axes.titlesize": 8, "axes.labelsize": 5})
 
     plt.figure(figsize=(12, 7))
-    sns.heatmap(df_cm, annot=True)
+    plot = sns.heatmap(df_cm, annot=True)
+    # plot.set_xticks(range(len(num_classes)))
+    # plot.set_xticklabels(
+    #     ['0', ' ', ' ', '3', ' ', ' ', '6', ' ', ' ', '9', ' ', ' ', '12', ' ', ' ', '15', ' ', ' ', '18', ' ', ' ',
+    #      '21', ' ', ' ', '24', ' ', ' ', '27', ' ', '29'])
+    # plot.set_yticks(range(len(num_classes)))
+    # plot.set_yticklabels(
+    #     ['0', ' ', ' ', '3', ' ', ' ', '6', ' ', ' ', '9', ' ', ' ', '12', ' ', ' ', '15', ' ', ' ', '18', ' ', ' ',
+    #      '21', ' ', ' ', '24', ' ', ' ', '27', ' ', '29'])
+    # plot.set_xticklabels(
+    #     ['0', ' ', ' ', '3', ' ', ' ', '6', ' ', ' ', '9', ' ', ' ', '12', ' ', ' ', '15', ' ', ' ', '18', ' ', '20'])
+    # plot.set_yticks(range(len(num_classes)))
+    # plot.set_yticklabels(
+    #     ['0', ' ', ' ', '3', ' ', ' ', '6', ' ', ' ', '9', ' ', ' ', '12', ' ', ' ', '15', ' ', ' ', '18', ' ', '20'])
     plt.savefig(dataset + "_" + 'confusion_matrix.png')
 
     # Compute per-class accuracy
