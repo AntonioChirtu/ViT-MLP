@@ -178,7 +178,7 @@ if __name__ == '__main__':
     num_labels = 30
     batch_size = 8
     num_workers = 2
-    max_epochs = 200
+    max_epochs = 100
     dataset = "AID"
 
     feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
@@ -189,11 +189,11 @@ if __name__ == '__main__':
         RandomVerticalFlip(0.3),
         RandomHorizontalFlip(0.3),
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
-        ExtractFeatures(feature_extractor)
+        # ExtractFeatures(feature_extractor)
     ])
     transform_test = transforms.Compose([
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
-        ExtractFeatures(feature_extractor)
+        # ExtractFeatures(feature_extractor)
     ])
 
     # The directory with the test set contains 30% of data (used to train)
@@ -215,53 +215,7 @@ if __name__ == '__main__':
                              num_workers=4,
                              pin_memory=True) if testset is not None else None
 
-    # ---------------- PYTORCH-LIGHTNING TRAINING ----------------
-
-    # checkpoint_callback = ModelCheckpoint(
-    #     dirpath="/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/version_0",
-    #     filename="best_model",
-    #     save_top_k=1,
-    #     mode="min",
-    # )
-
-    # save_path_pl = r'/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/version_0'
-    # model = MLP_pl(num_labels)
-    #
-    # pl.seed_everything(42)
-    # trainer = pl.Trainer(auto_scale_batch_size='power', gpus=1, deterministic=True, max_epochs=max_epochs,
-    #                      auto_lr_find=True, benchmark=True, callbacks=[checkpoint_callback])
-    # if not os.path.exists(save_path_pl):
-    #     trainer.fit(model, train_loader)
-    #
-    # model = model.load_from_checkpoint(save_path_pl + "/best_model-v1.ckpt", num_labels=num_labels)
-    # trainer.test(model, test_loader)
-
-    # model = ViT(
-    #     image_size=224,
-    #     patch_size=32,
-    #     num_classes=num_labels,
-    #     dim=512,
-    #     depth=3,
-    #     heads=6,
-    #     mlp_dim=512,
-    #     dropout=0.1,
-    #     emb_dropout=0.1,
-    #     channels=6
-    # )
-
-    # model = LeViT(
-    #     image_size=224,
-    #     num_classes=num_labels,
-    #     stages=1,  # number of stages
-    #     dim=(256),  # dimensions at each stage
-    #     depth=4,  # transformer of depth 4 at each stage
-    #     heads=(6),  # heads at each stage
-    #     mlp_mult=2,
-    #     dropout=0.1,
-    #     input_channels=6
-    # )
-
-    model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
+    model = ConvTransformer(input_nc=3, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
 
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
@@ -297,7 +251,7 @@ if __name__ == '__main__':
                     inputs = inputs.numpy()
                     for batch in range(inputs.shape[0]):
                         for channel in range(3):
-                            temp = gaussian_filter(inputs[batch, channel, :, :], sigma=0.5/(5*epoch))
+                            temp = gaussian_filter(inputs[batch, channel, :, :], sigma=0.5 / (5 * epoch))
                     inputs = torch.from_numpy(inputs)
 
                 inputs = inputs.to(device)
@@ -412,4 +366,3 @@ if __name__ == '__main__':
         print(cf_matrix.diagonal()[idx])
 
     print("Precision@K: ", precision.compute().cpu().numpy())
-
