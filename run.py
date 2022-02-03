@@ -4,7 +4,7 @@ import time
 from matplotlib import pyplot as plt
 from torchmetrics import Precision
 from transformers import ViTFeatureExtractor
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import DataLoader, ConcatDataset
 from torchvision.transforms import ToTensor, Normalize, Resize, Compose, RandomVerticalFlip, RandomHorizontalFlip, \
     RandomResizedCrop, RandomRotation
 
@@ -19,7 +19,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 from ViT import ViT
 from LeViT import LeViT
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, KFold
 import numpy as np
 
 from img_model import ExtractFeatures
@@ -31,6 +31,9 @@ from CyTran import ConvTransformer
 from sklearn.metrics import confusion_matrix
 import pandas as pd
 import seaborn as sns
+
+from data_loaders.data_loader import RemoteSensingDataset
+from sklearn.model_selection import train_test_split
 
 term_width = 10
 
@@ -175,16 +178,17 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
 
 if __name__ == '__main__':
     model_name_or_path = 'google/vit-base-patch16-224-in21k'
-    num_labels = 7
+    num_labels = 21
     batch_size = 8
     num_workers = 8
     max_epochs = 100
-    dataset = "Sydney"
+    split = 0.7
+    dataset_path = "UCM"
+    full_path = "/home/antonio/PycharmProjects/ViT-MLP/" + dataset_path
 
     feature_extractor = ViTFeatureExtractor.from_pretrained(model_name_or_path)
 
     transform_train = transforms.Compose([
-        # RandomResizedCrop(224),
         RandomRotation([-5, 5]),
         RandomVerticalFlip(0.3),
         RandomHorizontalFlip(0.3),
@@ -196,24 +200,24 @@ if __name__ == '__main__':
         ExtractFeatures(feature_extractor)
     ])
 
-    # The directory with the test set contains 30% of data (used to train)
-    trainset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/" + dataset + "_70-30/train",
-                                    transform=transform_train)
-    testset = datasets.ImageFolder(root="/home/antonio/PycharmProjects/ViT-MLP/" + dataset + "_70-30/test",
-                                   transform=transform_test)
+    train_dataset = RemoteSensingDataset(dataset_dir=full_path, type='train', split=split, transform=transform_train)
+    test_dataset = RemoteSensingDataset(dataset_dir=full_path, type='test', split=split, transform=transform_test)
+    # dataset = ConcatDataset([train_dataset, test_dataset])
+    #
+    # k_folds = 5
+    # results = {}
+    # kfold = KFold(n_splits=k_folds, shuffle=True)
+    #
+    # print('--------------------------------')
+    #
+    # # K-fold Cross Validation model evaluation
+    # for fold, (train_ids, test_ids) in enumerate(kfold.split(dataset)):
+    #     # Print
+    #     print(f'FOLD {fold}')
+    #     print('--------------------------------')
 
-    train_sampler = RandomSampler(trainset)
-    test_sampler = SequentialSampler(testset)
-    train_loader = DataLoader(trainset,
-                              sampler=train_sampler,
-                              batch_size=batch_size,
-                              num_workers=4,
-                              pin_memory=True)
-    test_loader = DataLoader(testset,
-                             sampler=test_sampler,
-                             batch_size=1,
-                             num_workers=4,
-                             pin_memory=True) if testset is not None else None
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=8)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=8)
 
     model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
 
@@ -225,7 +229,7 @@ if __name__ == '__main__':
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = model.to(device)
-    save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+CT_net_' + dataset + '.pth'
+    save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+CT_net_' + dataset_path + '.pth'
     # model = MLP_classic(num_labels).to(device)
 
     loss_function = nn.CrossEntropyLoss()
@@ -243,7 +247,7 @@ if __name__ == '__main__':
             reg_loss = 0
             correct = 0
             total = 0
-            best_acc = 0
+            best_acc = 0.0
             for i, data in enumerate(train_loader, 0):
                 inputs, targets = data
 
@@ -307,6 +311,7 @@ if __name__ == '__main__':
             acc_list.append(100 * correct / total)
 
             if (100 * correct / total) > best_acc:
+                best_acc = 100 * correct / total
                 torch.save(model.state_dict(), save_path_classic)
 
     # print('Training process has finished.')
@@ -354,7 +359,7 @@ if __name__ == '__main__':
     df_cm = pd.DataFrame(cf_matrix,
                          index=[i for i in range(len(num_classes))],
                          columns=[i for i in range(len(num_classes))])
-    df_cm = df_cm.round(2)
+    df_cm = df_cm.round(1)
 
     sns.set(font_scale=1, rc={'text.usetex' : True})
     # sns.set_context("paper", rc={"font.size": 8, "axes.titlesize": 8, "axes.labelsize": 5})
@@ -374,7 +379,7 @@ if __name__ == '__main__':
     # plot.set_yticks(range(len(num_classes)))
     # plot.set_yticklabels(
     #     ['0', ' ', ' ', '3', ' ', ' ', '6', ' ', ' ', '9', ' ', ' ', '12', ' ', ' ', '15', ' ', ' ', '18', ' ', '20'])
-    plt.savefig(dataset + "_" + 'confusion_matrix.png')
+    plt.savefig(dataset_path + "_" + 'confusion_matrix.png')
 
     # Compute per-class accuracy
     print("Accuracy for class: ")
