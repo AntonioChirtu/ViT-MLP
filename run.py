@@ -176,13 +176,24 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
     return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 
+def reset_weights(m):
+    '''
+    Try resetting model weights to avoid
+    weight leakage.
+  '''
+    for layer in m.children():
+        if hasattr(layer, 'reset_parameters'):
+            print(f'Reset trainable parameters of layer = {layer}')
+            layer.reset_parameters()
+
+
 if __name__ == '__main__':
     model_name_or_path = 'google/vit-base-patch16-224-in21k'
     num_labels = 21
     batch_size = 8
     num_workers = 8
     max_epochs = 100
-    split = 0.7
+    split = 0.8
     dataset_path = "UCM"
     full_path = "/home/antonio/PycharmProjects/ViT-MLP/" + dataset_path
 
@@ -202,42 +213,48 @@ if __name__ == '__main__':
 
     train_dataset = RemoteSensingDataset(dataset_dir=full_path, type='train', split=split, transform=transform_train)
     test_dataset = RemoteSensingDataset(dataset_dir=full_path, type='test', split=split, transform=transform_test)
-    # dataset = ConcatDataset([train_dataset, test_dataset])
-    #
-    # k_folds = 5
-    # results = {}
-    # kfold = KFold(n_splits=k_folds, shuffle=True)
-    #
-    # print('--------------------------------')
-    #
-    # # K-fold Cross Validation model evaluation
-    # for fold, (train_ids, test_ids) in enumerate(kfold.split(dataset)):
-    #     # Print
-    #     print(f'FOLD {fold}')
-    #     print('--------------------------------')
+    dataset = ConcatDataset([train_dataset, test_dataset])
 
-    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=8)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=8)
+    k_folds = 4
+    results = {}
+    kfold = KFold(n_splits=k_folds, shuffle=True)
 
-    model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
+    print('--------------------------------')
 
-    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-    params = sum([np.prod(p.size()) for p in model_parameters])
-    print(params)
+    # K-fold Cross Validation model evaluation
+    for fold, (train_ids, test_ids) in enumerate(kfold.split(dataset)):
+        # Print
+        print(f'FOLD {fold}')
+        print('--------------------------------')
 
-    # ---------------- CLASSIC TRAINING ----------------
+        train_subsampler = torch.utils.data.SubsetRandomSampler(train_ids)
+        test_subsampler = torch.utils.data.SubsetRandomSampler(test_ids)
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = model.to(device)
-    save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+CT_net_' + dataset_path + '.pth'
-    # model = MLP_classic(num_labels).to(device)
+        train_loader = DataLoader(dataset, batch_size=8, sampler=train_subsampler, num_workers=8)
+        test_loader = DataLoader(dataset, batch_size=1, sampler=test_subsampler, num_workers=8)
 
-    loss_function = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+        model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
+        model.apply(reset_weights)
 
-    acc_list = []
+        model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+        params = sum([np.prod(p.size()) for p in model_parameters])
+        print(params)
 
-    if not os.path.exists(save_path_classic):
+        # ---------------- CLASSIC TRAINING ----------------
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = model.to(device)
+        save_path_classic = '/home/antonio/PycharmProjects/ViT-MLP/ViT-MLP/ViT+CT_net_' + dataset_path + '.pth'
+        # model = MLP_classic(num_labels).to(device)
+
+        loss_function = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+        acc_list = []
+
+        # if not os.path.exists(save_path_classic):
+        save_path = f'./model-fold-{fold}.pth'
+
         model.train()
         for epoch in range(max_epochs):
             print(f'Starting epoch {epoch + 1}')
@@ -312,43 +329,64 @@ if __name__ == '__main__':
 
             if (100 * correct / total) > best_acc:
                 best_acc = 100 * correct / total
-                torch.save(model.state_dict(), save_path_classic)
+                # torch.save(model.state_dict(), save_path_classic)
+                torch.save(model.state_dict(), save_path)
 
-    # print('Training process has finished.')
-    # plt.plot(np.linspace(0, max_epochs, max_epochs), acc_list)
-    # plt.show()
+        # Process is complete.
+        print('Training process has finished. Saving trained model.')
 
-    model.load_state_dict(torch.load(save_path_classic))
-    model.eval()
-    model.to(device)
+        # Print about testing
+        print('Starting testing')
 
-    correct = 0.0
-    total = 0.0
-    y_pred = []
-    y_true = []
+        # Saving the model
+        # save_path = f'./model-fold-{fold}.pth'
+        # torch.save(model.state_dict(), save_path)
 
-    precision = Precision(num_classes=num_labels, top_k=3)
-    precision = precision.to(device)
+        model.load_state_dict(torch.load(save_path))
+        model.eval()
+        model.to(device)
 
-    with torch.no_grad():
-        for data in tqdm(test_loader):
-            images, labels = data
-            images = images.to(device)
-            labels = labels.to(device)
+        correct = 0.0
+        total = 0.0
+        y_pred = []
+        y_true = []
 
-            outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
+        precision = Precision(num_classes=num_labels, top_k=3)
+        precision = precision.to(device)
 
-            precision(outputs, labels)
+        with torch.no_grad():
+            for data in tqdm(test_loader):
+                images, labels = data
+                images = images.to(device)
+                labels = labels.to(device)
 
-            y_pred.extend(predicted.cpu().numpy())
-            y_true.extend(labels.cpu().numpy())
+                outputs = model(images)
+                _, predicted = torch.max(outputs.data, 1)
 
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+                precision(outputs, labels)
 
-    print('Accuracy of the network on the test images: %f %%' % (
-            100 * correct / total))
+                y_pred.extend(predicted.cpu().numpy())
+                y_true.extend(labels.cpu().numpy())
+
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        print('Accuracy of the network on the test images: %f %%' % (
+                100 * correct / total))
+
+        # Print accuracy
+        print('Accuracy for fold %d: %f %%' % (fold, 100.0 * correct / total))
+        print('--------------------------------')
+        results[fold] = 100.0 * (correct / total)
+
+        # Print fold results
+    print(f'K-FOLD CROSS VALIDATION RESULTS FOR {k_folds} FOLDS')
+    print('--------------------------------')
+    sum = 0.0
+    for key, value in results.items():
+        print(f'Fold {key}: {value} %')
+        sum += value
+    print(f'Average: {sum / len(results.items())} %')
 
     torch.cuda.empty_cache()
 
@@ -361,7 +399,7 @@ if __name__ == '__main__':
                          columns=[i for i in range(len(num_classes))])
     df_cm = df_cm.round(1)
 
-    sns.set(font_scale=1, rc={'text.usetex' : True})
+    sns.set(font_scale=1, rc={'text.usetex': True})
     # sns.set_context("paper", rc={"font.size": 8, "axes.titlesize": 8, "axes.labelsize": 5})
 
     plt.figure(figsize=(12, 7))
