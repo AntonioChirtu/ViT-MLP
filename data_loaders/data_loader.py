@@ -43,7 +43,6 @@ class RemoteSensingDataset(Dataset):
         return l
 
     def __getitem__(self, idx):
-        # print(os.path.join(self.dataset_dir, str(self.img_labels[idx]), self.images[idx]))
         img_path = os.path.join(self.dataset_dir, str(self.img_labels[idx]), self.images[idx])
         image = Image.open(img_path)
         label = self.img_labels[idx]

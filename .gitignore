@@ -147,3 +147,9 @@ bbbb.py
 Figure_1.png
 README.md
 .idea/
+
+model-fold-0.pth
+model-fold-1.pth
+model-fold-2.pth
+model-fold-3.pth
+CV_project_source_code.zip

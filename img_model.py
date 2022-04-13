@@ -11,6 +11,7 @@ from transformers import (AdamW, get_linear_schedule_with_warmup, ViTForImageCla
 
 from torch import nn
 import numpy as np
+from matplotlib import  pyplot as plt
 
 warnings.filterwarnings('ignore')
 

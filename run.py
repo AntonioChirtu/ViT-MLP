@@ -10,15 +10,11 @@ from torchvision.transforms import ToTensor, Normalize, Resize, Compose, RandomV
 
 import torch
 from torchvision import datasets, transforms
-import pytorch_lightning as pl
+import torchvision.models as models
 
-import os
 from tqdm import tqdm
 from torch import nn
-from pytorch_lightning.callbacks import ModelCheckpoint
 
-from ViT import ViT
-from LeViT import LeViT
 from sklearn.model_selection import GridSearchCV, KFold
 import numpy as np
 
@@ -33,7 +29,6 @@ import pandas as pd
 import seaborn as sns
 
 from data_loaders.data_loader import RemoteSensingDataset
-from sklearn.model_selection import train_test_split
 
 term_width = 10
 
@@ -192,7 +187,7 @@ if __name__ == '__main__':
     num_labels = 21
     batch_size = 8
     num_workers = 8
-    max_epochs = 100
+    max_epochs = 50
     split = 0.8
     dataset_path = "UCM"
     full_path = "/home/antonio/PycharmProjects/ViT-MLP/" + dataset_path
@@ -204,11 +199,11 @@ if __name__ == '__main__':
         RandomVerticalFlip(0.3),
         RandomHorizontalFlip(0.3),
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
-        ExtractFeatures(feature_extractor)
+        # ExtractFeatures(feature_extractor)
     ])
     transform_test = transforms.Compose([
         ViTFeatureExtractorTransforms(model_name_or_path, feature_extractor),
-        ExtractFeatures(feature_extractor)
+        # ExtractFeatures(feature_extractor)
     ])
 
     train_dataset = RemoteSensingDataset(dataset_dir=full_path, type='train', split=split, transform=transform_train)
@@ -233,9 +228,13 @@ if __name__ == '__main__':
         train_loader = DataLoader(dataset, batch_size=8, sampler=train_subsampler, num_workers=8)
         test_loader = DataLoader(dataset, batch_size=1, sampler=test_subsampler, num_workers=8)
 
-        model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
-        model.apply(reset_weights)
+        # model = ConvTransformer(input_nc=6, out_classes=num_labels, n_downsampling=3, depth=9, heads=6, dropout=0.5)
+        # model.apply(reset_weights)
 
+        model = models.vgg16(pretrained=True)
+        num_ftrs = model.classifier[6].in_features
+        model.classifier[6] = nn.Linear(num_ftrs, num_labels)
+        
         model_parameters = filter(lambda p: p.requires_grad, model.parameters())
         params = sum([np.prod(p.size()) for p in model_parameters])
         print(params)
@@ -382,6 +381,50 @@ if __name__ == '__main__':
         # Print fold results
     print(f'K-FOLD CROSS VALIDATION RESULTS FOR {k_folds} FOLDS')
     print('--------------------------------')
+
+    # train_dataset = RemoteSensingDataset(dataset_dir=full_path, type='train', split=split, transform=transform_test)
+    # test_dataset = RemoteSensingDataset(dataset_dir=full_path, type='test', split=split, transform=transform_test)
+    # dataset = ConcatDataset([train_dataset, test_dataset])
+    #
+    # test_loader = DataLoader(dataset, batch_size=1, num_workers=8)
+    #
+    # import torchvision.models as models
+    #
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # model = models.vgg16(pretrained=True)
+    #
+    # # print(model)
+    # num_ftrs = model.classifier[6].in_features
+    # model.classifier[6] = nn.Linear(num_ftrs, num_labels)
+    # model = model.to(device)
+    #
+    # correct = 0.0
+    # total = 0.0
+    # y_pred = []
+    # y_true = []
+    #
+    # precision = Precision(num_classes=num_labels, top_k=3)
+    # precision = precision.to(device)
+    #
+    # with torch.no_grad():
+    #     for data in tqdm(test_loader):
+    #         images, labels = data
+    #         images = images.to(device)
+    #         labels = labels.to(device)
+    #
+    #         outputs = model(images)
+    #         _, predicted = torch.max(outputs.data, 1)
+    #
+    #         precision(outputs, labels)
+    #
+    #         y_pred.extend(predicted.cpu().numpy())
+    #         y_true.extend(labels.cpu().numpy())
+    #
+    #         total += labels.size(0)
+    #         correct += (predicted == labels).sum().item()
+    #
+    # print('Accuracy of the network on the test images: %f %%' % (
+    #         100 * correct / total))
     sum = 0.0
     for key, value in results.items():
         print(f'Fold {key}: {value} %')
